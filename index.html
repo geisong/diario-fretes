@@ -94,10 +94,17 @@ button.danger{color:var(--neg)}
 .empty{color:var(--muted);text-align:center;padding:18px 0}
 nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;background:var(--surface);border-top:1px solid var(--line);
   padding-left:max(8px,env(safe-area-inset-left,0px));padding-right:max(8px,env(safe-area-inset-right,0px));padding-top:6px;padding-bottom:calc(6px + env(safe-area-inset-bottom,0px))}
-nav.tabs .in{max-width:720px;margin:0 auto;display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
-nav.tabs button{border:0;background:none;padding:8px 2px;font-family:var(--display);font-size:.95rem;letter-spacing:.03em;color:var(--muted);border-radius:6px;font-weight:600}
+nav.tabs .in{max-width:720px;margin:0 auto;display:grid;grid-template-columns:repeat(6,1fr);gap:3px}
+nav.tabs button{border:0;background:none;padding:8px 0;font-family:var(--display);font-size:.9rem;letter-spacing:.03em;color:var(--muted);border-radius:6px;font-weight:600}
 nav.tabs button[aria-selected="true"]{color:var(--sign-fg);background:var(--sign)}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(76px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:8px;font-weight:600;z-index:20;max-width:calc(100% - 32px)}
+.route-box{display:grid;gap:4px;background:var(--soft);border-radius:8px;padding:12px;font-size:.95rem}
+.route-box .city{font-weight:600}
+.route-box .meta{font-size:.82rem;color:var(--muted)}
+.check{display:flex;gap:10px;align-items:center;text-transform:none;letter-spacing:0;font-size:.95rem;color:var(--fg);font-weight:500}
+.check input{width:20px;height:20px}
+.price{display:grid;gap:4px;border:2px solid var(--sign);border-radius:10px;padding:14px}
+.err{color:var(--neg);font-size:.9rem}
 .sync{font-size:.75rem;color:var(--muted);text-align:center}
 @media (prefers-reduced-motion:no-preference){.view{animation:in .18s ease-out}@keyframes in{from{opacity:.4;transform:translateY(4px)}to{opacity:1;transform:none}}}
 </style>
@@ -114,6 +121,7 @@ nav.tabs button[aria-selected="true"]{color:var(--sign-fg);background:var(--sign
 
 <nav class="tabs" aria-label="Seções"><div class="in" role="tablist">
   <button role="tab" data-tab="lancar">Lançar</button>
+  <button role="tab" data-tab="cobrar">Cobrar</button>
   <button role="tab" data-tab="dia">Dia</button>
   <button role="tab" data-tab="mes">Mês</button>
   <button role="tab" data-tab="viagens">Viagens</button>
@@ -144,7 +152,7 @@ const COSTS = [
   ['diesel','Diesel'],['pedagio','Pedágio'],['alimentacao','Alimentação'],
   ['pernoite','Pernoite / hotel'],['descarga','Chapa / descarga'],['outros','Outros']
 ];
-const DEFAULT_SETTINGS = {consumo:9.5, precoDiesel:6.29, reservaKm:0.35, fixos:0, metaMes:0};
+const DEFAULT_SETTINGS = {consumo:9.5, precoDiesel:6.29, reservaKm:0.35, fixos:0, metaMes:0, valorKm:3};
 
 // ---- estado ----
 let state = { trips:[], settings:{...DEFAULT_SETTINGS}, mode:'local', loaded:false };
@@ -210,7 +218,7 @@ function render(){
   const keepFocus = document.activeElement && document.activeElement.id;
   if(ui.tab==='lancar' && app.querySelector('#f-frete') && !ui._rerenderForm) { return; }
   ui._rerenderForm=false;
-  const v = {lancar:viewForm, dia:viewDay, mes:viewMonth, viagens:viewTrips, ajustes:viewSettings}[ui.tab]();
+  const v = {lancar:viewForm, cobrar:viewQuote, dia:viewDay, mes:viewMonth, viagens:viewTrips, ajustes:viewSettings}[ui.tab]();
   app.innerHTML = `<div class="view" style="display:grid;gap:16px">${v}</div>` +
     `<p class="sync">Dados salvos neste aparelho. Faça backup em Ajustes de vez em quando.</p>`;
   bind();
@@ -220,13 +228,13 @@ function render(){
 function sampleBanner(){ return isSample()? `<div class="banner"><b>Dados de exemplo.</b> Assim que você lançar a primeira viagem, os relatórios passam a mostrar só os seus números.</div>`:''; }
 
 function viewForm(){
-  const t = ui.editId ? state.trips.find(x=>x.id===ui.editId) || {} : {date:todayISO()};
+  const t = ui.editId ? state.trips.find(x=>x.id===ui.editId) || {} : (ui.prefill || {date:todayISO()});
   const s = state.settings;
   return `
   <section class="panel">
     <div class="row" style="justify-content:space-between;align-items:center">
       <h2>${ui.editId?'Editar viagem':'Nova viagem'}</h2>
-      ${ui.editId?'<button class="link" id="cancelEdit">Cancelar edição</button>':''}
+      ${ui.editId?'<button class="link" id="cancelEdit">Cancelar edição</button>':ui.prefill?'<button class="link" id="cancelEdit">Limpar</button>':''}
     </div>
     <div class="grid2">
       <label>Data<input id="f-date" type="date" value="${esc(t.date||todayISO())}"></label>
@@ -308,6 +316,140 @@ function summaryBlock(T, opts={}){
   </dl>`;
 }
 
+
+// ---- cobrança: CEP -> cidade -> distância pela estrada ----
+ui.q = {cepO:'', cepD:'', o:null, d:null, km:0, horas:0, aprox:false, retorno:false, repassa:true, pedagio:0, extras:0, valorKm:null, erro:'', buscando:false};
+try{ const q=JSON.parse(localStorage.getItem('df_quote')||'null'); if(q) Object.assign(ui.q,q,{buscando:false,erro:''}); }catch(e){}
+const saveQuote=()=>{ try{ localStorage.setItem('df_quote',JSON.stringify(ui.q)); }catch(e){} };
+const cepDigits = v => String(v||'').replace(/\D/g,'').slice(0,8);
+const cepFmt = v => { const d=cepDigits(v); return d.length>5? d.slice(0,5)+'-'+d.slice(5) : d; };
+
+async function getJSON(url){ const r=await fetch(url,{headers:{'Accept':'application/json'}}); if(!r.ok) throw new Error('http '+r.status); return r.json(); }
+async function cepInfo(raw){
+  const cep=cepDigits(raw); if(cep.length!==8) throw new Error('CEP '+cepFmt(raw)+' incompleto. Digite os 8 números.');
+  let city='', uf='', street='', bairro='', lat=NaN, lon=NaN;
+  try{ const j=await getJSON('https://brasilapi.com.br/api/cep/v2/'+cep);
+    city=j.city||''; uf=j.state||''; street=j.street||''; bairro=j.neighborhood||'';
+    const c=j.location&&j.location.coordinates; if(c){ lat=parseFloat(c.latitude); lon=parseFloat(c.longitude); } }catch(e){}
+  if(!city){ try{ const j=await getJSON('https://viacep.com.br/ws/'+cep+'/json/'); if(!j.erro){ city=j.localidade; uf=j.uf; street=j.logradouro||''; bairro=j.bairro||''; } }catch(e){} }
+  if(!city) throw new Error('Não encontrei o CEP '+cepFmt(cep)+'. Confira os números.');
+  if(!isFinite(lat)||!isFinite(lon)){
+    const tries=[];
+    if(street) tries.push('street='+encodeURIComponent(street)+'&city='+encodeURIComponent(city)+'&state='+encodeURIComponent(uf));
+    tries.push('city='+encodeURIComponent(city)+'&state='+encodeURIComponent(uf));
+    for(const t of tries){ try{ const j=await getJSON('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=br&'+t);
+      if(j&&j[0]){ lat=parseFloat(j[0].lat); lon=parseFloat(j[0].lon); break; } }catch(e){} }
+  }
+  if(!isFinite(lat)||!isFinite(lon)) throw new Error('Achei '+city+'/'+uf+', mas não a localização no mapa. Digite os km manualmente.');
+  return {cep, city, uf, street, bairro, lat, lon};
+}
+function haversine(a,b){ const R=6371, r=x=>x*Math.PI/180; const dLa=r(b.lat-a.lat), dLo=r(b.lon-a.lon);
+  const h=Math.sin(dLa/2)**2+Math.cos(r(a.lat))*Math.cos(r(b.lat))*Math.sin(dLo/2)**2; return 2*R*Math.asin(Math.sqrt(h)); }
+async function rota(a,b){
+  try{ const j=await getJSON(`https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false`);
+    if(j.routes&&j.routes[0]) return {km:j.routes[0].distance/1000, horas:j.routes[0].duration/3600, aprox:false}; }catch(e){}
+  const km=haversine(a,b)*1.25; return {km, horas:km/70, aprox:true};
+}
+async function calcularDistancia(){
+  const q=ui.q; q.cepO=$('#q-cepO').value; q.cepD=$('#q-cepD').value; q.erro=''; q.buscando=true; renderQuoteRoute();
+  try{
+    const [o,d]=await Promise.all([cepInfo(q.cepO), cepInfo(q.cepD)]);
+    q.o=o; q.d=d;
+    const r=await rota(o,d); q.km=Math.round(r.km); q.horas=r.horas; q.aprox=r.aprox;
+    const kmEl=$('#q-km'); if(kmEl) kmEl.value=fmtIn(q.km);
+  }catch(e){ q.erro=e.message||'Não consegui calcular. Verifique a internet ou digite os km.'; }
+  q.buscando=false; saveQuote(); renderQuoteRoute(); updateQuote();
+}
+function renderQuoteRoute(){
+  const el=$('#q-route'); if(!el) return; const q=ui.q;
+  if(q.buscando){ el.innerHTML='<div class="route-box"><span class="meta">Buscando os CEPs e a rota…</span></div>'; return; }
+  let h='';
+  if(q.erro) h+=`<p class="err" style="margin:0">${esc(q.erro)}</p>`;
+  if(q.o&&q.d) h+=`<div class="route-box">
+      <div><span class="city">${esc(q.o.city)}/${esc(q.o.uf)}</span> → <span class="city">${esc(q.d.city)}/${esc(q.d.uf)}</span></div>
+      <div class="meta num">${q.km?N0.format(q.km)+' km pela estrada':''}${q.horas?' · cerca de '+tempo(q.horas)+' dirigindo':''}${q.aprox?' · estimativa (rota indisponível agora)':''}</div>
+      ${q.o.street||q.d.street?`<div class="meta">${esc([q.o.street,q.o.bairro].filter(Boolean).join(', '))} → ${esc([q.d.street,q.d.bairro].filter(Boolean).join(', '))}</div>`:''}
+    </div>`;
+  el.innerHTML=h;
+}
+function tempo(h){ const t=Math.round(h*60); const hh=Math.floor(t/60), mm=t%60; return hh? `${hh}h${mm?pad(mm):''}` : `${mm} min`; }
+
+function readQuote(){
+  const q=ui.q, s=state.settings, g=id=>$('#q-'+id);
+  q.km=num(g('km').value); q.retorno=g('retorno').checked; q.repassa=g('repassa').checked;
+  q.valorKm=num(g('valorKm').value)||null; q.pedagio=num(g('pedagio').value); q.extras=num(g('extras').value);
+  const valorKm=q.valorKm||+s.valorKm||0;
+  const kmTotal=q.km*(q.retorno?2:1);
+  const valor=kmTotal*valorKm + (q.repassa?q.pedagio:0);
+  const litros=kmTotal/(+s.consumo||1), diesel=litros*(+s.precoDiesel||0), reserva=kmTotal*(+s.reservaKm||0);
+  const custo=diesel+q.pedagio+q.extras+reserva;
+  return {kmTotal, valorKm, valor, litros, diesel, reserva, custo, lucro:valor-custo};
+}
+function updateQuote(){
+  const el=$('#q-result'); if(!el) return; const r=readQuote(), q=ui.q, s=state.settings; saveQuote();
+  if(!q.km){ el.innerHTML='<p class="empty" style="padding:6px 0">Calcule a distância pelos CEPs ou digite os km para ver o valor.</p>'; return; }
+  if(!r.valorKm){ el.innerHTML='<p class="empty" style="padding:6px 0">Informe o valor por km rodado.</p>'; return; }
+  const lucroKm=r.kmTotal? r.lucro/r.kmTotal : 0;
+  el.innerHTML=`
+    <div class="price">
+      <span class="hint" style="text-transform:uppercase;letter-spacing:.08em;font-weight:600">Valor do frete</span>
+      <span class="num" style="font-family:var(--display);font-weight:700;font-size:2.6rem;line-height:1">${money(r.valor)}</span>
+      <span class="hint num">${N0.format(r.kmTotal)} km × ${money(r.valorKm)}/km${q.repassa&&q.pedagio?' + pedágio '+money(q.pedagio):''}</span>
+    </div>
+    <h3>Quanto sobra para você</h3>
+    <dl class="kv">
+      <dt>Valor do frete</dt><dd>${money(r.valor)}</dd>
+      <dt>Diesel · ${N2.format(r.litros)} l (${fmtIn(s.consumo)} km/l a ${money(s.precoDiesel)})</dt><dd class="cost">− ${money(r.diesel)}</dd>
+      <dt>Pedágio</dt><dd class="cost">− ${money(q.pedagio)}</dd>
+      <dt>Alimentação, pernoite e outros</dt><dd class="cost">− ${money(q.extras)}</dd>
+      <dt>Reserva de manutenção</dt><dd class="cost">− ${money(r.reserva)}</dd>
+      <dt class="sum">Lucro estimado</dt><dd class="sum ${r.lucro<0?'neg':'pos'}">${money(r.lucro)}</dd>
+      <dt>Lucro por km rodado</dt><dd class="${lucroKm<0?'neg':''}">${money(lucroKm)}</dd>
+    </dl>
+    ${r.lucro<0?`<p class="err" style="margin:0">Com esse valor por km a viagem dá prejuízo. O mínimo para empatar é ${money(r.kmTotal? (r.custo-(q.repassa?q.pedagio:0))/r.kmTotal : 0)}/km.</p>`:''}
+    <div class="row"><button class="primary" id="q-lancar" style="flex:1">Lançar como viagem</button><button id="q-copiar">Copiar orçamento</button></div>`;
+  $('#q-lancar').addEventListener('click',()=>{
+    const o=q.o, d=q.d;
+    ui.prefill={date:todayISO(), origem:o?`${o.city}/${o.uf}`:'', destino:d?`${d.city}/${d.uf}`:'', km:r.kmTotal, frete:Math.round(r.valor*100)/100,
+      diesel:Math.round(r.diesel*100)/100, litros:Math.round(r.litros*10)/10, pedagio:q.pedagio, outros:q.extras,
+      obs:(o&&d?`CEP ${cepFmt(o.cep)} → ${cepFmt(d.cep)} · `:'')+`${money(r.valorKm)}/km${q.retorno?' · ida e volta':''}`};
+    ui.editId=null; go('lancar'); toast('Confira os valores e salve a viagem');
+  });
+  $('#q-copiar').addEventListener('click',()=>{
+    const o=q.o, d=q.d;
+    const txt=['Orçamento de frete',
+      o?`Origem: ${o.city}/${o.uf} (CEP ${cepFmt(o.cep)})`:'', d?`Destino: ${d.city}/${d.uf} (CEP ${cepFmt(d.cep)})`:'',
+      `Distância: ${N0.format(q.km)} km${q.retorno?' (cobrada ida e volta)':''}`, `Valor: ${money(r.valor)}`].filter(Boolean).join('\n');
+    const ok=()=>toast('Orçamento copiado. Cole no WhatsApp.');
+    try{ navigator.clipboard.writeText(txt).then(ok,()=>fallbackCopy(txt,ok)); }catch(e){ fallbackCopy(txt,ok); }
+  });
+}
+function fallbackCopy(txt,ok){ const t=document.createElement('textarea'); t.value=txt; document.body.appendChild(t); t.select();
+  try{ document.execCommand('copy'); ok(); }catch(e){ toast('Não consegui copiar.'); } t.remove(); }
+
+function viewQuote(){
+  const q=ui.q, s=state.settings;
+  return `<section class="panel">
+    <h2>Quanto cobrar</h2>
+    <div class="grid2">
+      <label>CEP de origem<input id="q-cepO" inputmode="numeric" autocomplete="postal-code" placeholder="00000-000" maxlength="9" value="${esc(cepFmt(q.cepO))}"></label>
+      <label>CEP de destino<input id="q-cepD" inputmode="numeric" autocomplete="postal-code" placeholder="00000-000" maxlength="9" value="${esc(cepFmt(q.cepD))}"></label>
+    </div>
+    <button id="q-calc">Calcular distância</button>
+    <div id="q-route"></div>
+    <div class="grid2">
+      <label>Distância (km)<input id="q-km" inputmode="decimal" placeholder="0" value="${fmtIn(q.km)}"><span class="hint">Pode corrigir se souber a rota.</span></label>
+      <label>Valor por km rodado (R$)<input id="q-valorKm" inputmode="decimal" placeholder="${fmtIn(s.valorKm)}" value="${fmtIn(q.valorKm)}"></label>
+      <label>Pedágio (R$)<input id="q-pedagio" inputmode="decimal" placeholder="0,00" value="${fmtIn(q.pedagio)}"></label>
+      <label>Alimentação, pernoite, outros (R$)<input id="q-extras" inputmode="decimal" placeholder="0,00" value="${fmtIn(q.extras)}"><span class="hint">Entram só no seu custo.</span></label>
+    </div>
+    <label class="check"><input id="q-retorno" type="checkbox" ${q.retorno?'checked':''}> Cobrar a volta vazia (ida e volta)</label>
+    <label class="check"><input id="q-repassa" type="checkbox" ${q.repassa!==false?'checked':''}> Somar o pedágio ao valor cobrado</label>
+    <div id="q-result" style="display:grid;gap:14px"></div>
+    <p class="hint" style="margin:0">A distância vem do OpenStreetMap. O pedágio não é calculado automaticamente: informe o valor da rota. Consumo e preço do diesel usados no lucro ficam em Ajustes.</p>
+  </section>`;
+}
+
 function viewDay(){
   const list=data().filter(t=>t.date===ui.day);
   const T=totals(list);
@@ -380,6 +522,7 @@ function viewSettings(){
       <label>Reserva de manutenção (R$/km)<input id="s-reservaKm" inputmode="decimal" value="${fmtIn(s.reservaKm)}"><span class="hint">Pneus, óleo, freios, revisões. Use 0 para não descontar.</span></label>
       <label>Custos fixos por mês (R$)<input id="s-fixos" inputmode="decimal" value="${fmtIn(s.fixos)}"><span class="hint">Parcela, seguro, rastreador, ANTT, contador.</span></label>
       <label>Meta de lucro no mês (R$)<input id="s-metaMes" inputmode="decimal" value="${fmtIn(s.metaMes)}"><span class="hint">Opcional.</span></label>
+      <label>Valor por km rodado padrão (R$)<input id="s-valorKm" inputmode="decimal" value="${fmtIn(s.valorKm)}"><span class="hint">Preenche a aba Cobrar.</span></label>
     </div>
     <button class="primary" id="saveSettings">Salvar ajustes</button>
   </section>
@@ -405,10 +548,17 @@ function bind(){
       const l=km/(+s.consumo||1); $('#f-litros').value=N2.format(l).replace(/\./g,''); $('#f-diesel').value=N2.format(l*(+s.precoDiesel||0)).replace(/\./g,''); updatePreview(); });
     on('#save','click',async()=>{ const t=readForm();
       if(!t.frete && !t.km){ toast('Informe pelo menos o valor do frete ou os km rodados.'); return; }
-      t.id=ui.editId||newId(); const wasEdit=!!ui.editId; ui.editId=null; ui._rerenderForm=true;
+      t.id=ui.editId||newId(); const wasEdit=!!ui.editId; ui.editId=null; ui.prefill=null; ui._rerenderForm=true;
       await putTrip(t); ui.day=t.date; ui.month=t.date.slice(0,7);
       toast(wasEdit?'Viagem atualizada':'Viagem salva · lucro '+money(calc(t).lucro)); render(); });
-    on('#cancelEdit','click',()=>{ ui.editId=null; ui._rerenderForm=true; render(); });
+    on('#cancelEdit','click',()=>{ ui.editId=null; ui.prefill=null; ui._rerenderForm=true; render(); });
+  }
+  if(ui.tab==='cobrar'){
+    renderQuoteRoute(); updateQuote();
+    ['q-cepO','q-cepD'].forEach(id=>{ const el=$('#'+id); el.addEventListener('input',()=>{ const f=cepFmt(el.value); if(f!==el.value) el.value=f; ui.q[id==='q-cepO'?'cepO':'cepD']=el.value; saveQuote(); }); });
+    $('#q-cepD').addEventListener('keydown',e=>{ if(e.key==='Enter') calcularDistancia(); });
+    on('#q-calc','click',calcularDistancia);
+    app.querySelectorAll('#q-km,#q-valorKm,#q-pedagio,#q-extras,#q-retorno,#q-repassa').forEach(el=>el.addEventListener(el.type==='checkbox'?'change':'input',updateQuote));
   }
   on('#dayPick','change',e=>{ if(e.target.value){ ui.day=e.target.value; render(); } });
   on('#monthPick','change',e=>{ ui.month=e.target.value; render(); });
