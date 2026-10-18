@@ -1,0 +1,17 @@
+{
+  "name": "Diário de Fretes",
+  "short_name": "Fretes",
+  "description": "Controle de ganhos por frete: km rodados, custos e lucro por viagem, dia e mês.",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f5f3",
+  "theme_color": "#1d6440",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
